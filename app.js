@@ -73,6 +73,15 @@ var MOCK_RESPONSES = [
       '- 📝 内容创作\n' +
       '- 🔬 科学研究\n\n' +
       '你对哪个方向比较感兴趣？',
+    sources: {
+      docName: '人工智能基础教程.pdf',
+      docUrl: 'https://example.com/docs/ai-intro.pdf',
+      chunks: [
+        '人工智能（Artificial Intelligence，简称AI）是计算机科学的一个分支，旨在开发能够模拟、延伸和扩展人类智能的理论、方法、技术及应用系统。',
+        '机器学习是人工智能的核心子领域，通过算法让计算机从数据中学习模式，无需显式编程即可完成特定任务。常见方法包括监督学习、无监督学习和强化学习。',
+        '深度学习是机器学习的一个分支，使用多层神经网络来学习数据的层次化表示。卷积神经网络（CNN）和循环神经网络（RNN）是两种常见的深度学习架构。'
+      ]
+    }
   },
   {
     keywords: ['快速排序', '排序', '算法', 'python', 'Python'],
@@ -309,10 +318,33 @@ function appendMessageDOM(msg, animate) {
     bubbleContent = renderMarkdown(msg.content);
   }
 
+  // 构建溯源信息 HTML
+  var sourceHtml = '';
+  if (msg.sources && msg.sources.docName) {
+    var s = msg.sources;
+    var chunkNums = '';
+    for (var i = 0; i < s.chunks.length; i++) {
+      chunkNums += '<span class="source-chunk-num" data-chunk-index="' + i + '">' + (i + 1) + '</span>';
+      if (i < s.chunks.length - 1) chunkNums += ',';
+    }
+    sourceHtml = '<div class="message-sources">' +
+      '<a class="source-doc-link" href="' + escapeHtml(s.docUrl) + '" target="_blank" rel="noopener">' +
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>' +
+        escapeHtml(s.docName) +
+      '</a>' +
+      '<span class="source-divider">|</span>' +
+      '<span class="source-chunks">' + chunkNums + '</span>' +
+    '</div>';
+
+    // 存储知识块数据到 DOM
+    div.attr('data-chunks', JSON.stringify(s.chunks));
+  }
+
   div.html(
     '<div class="message-avatar">' + avatar + '</div>' +
     '<div class="message-content">' +
       '<div class="message-bubble">' + bubbleContent + '</div>' +
+      sourceHtml +
       '<div class="message-time">' + timeStr + '</div>' +
     '</div>'
   );
@@ -389,8 +421,12 @@ function sendMessage(content) {
     promise = sendMessageToAPI(content);
   }
 
-  promise.then(function(reply) {
+  promise.then(function(result) {
     removeTypingIndicator();
+
+    // result 可以是字符串或对象
+    var reply = typeof result === 'string' ? result : (result.reply || '');
+    var sources = typeof result === 'object' && result.sources ? result.sources : null;
 
     // 添加AI回复
     var aiMsg = {
@@ -399,6 +435,7 @@ function sendMessage(content) {
       content: reply,
       time: getTimeString(),
     };
+    if (sources) aiMsg.sources = sources;
     session.messages.push(aiMsg);
     appendMessageDOM(aiMsg);
     scrollToBottom();
@@ -443,10 +480,17 @@ function getMockResponse(userMessage) {
     }
   }
   var reply = matched ? matched.reply : DEFAULT_REPLY;
+  var sources = matched && matched.sources ? matched.sources : null;
 
   // 模拟网络延迟
   var delay = 800 + Math.random() * 1200;
-  setTimeout(function() { deferred.resolve(reply); }, delay);
+  setTimeout(function() {
+    if (sources) {
+      deferred.resolve({ reply: reply, sources: sources });
+    } else {
+      deferred.resolve(reply);
+    }
+  }, delay);
 
   return deferred.promise();
 }
@@ -675,6 +719,78 @@ function bindEvents() {
 
   // 主题切换
   $('#btnThemeToggle').on('click', toggleTheme);
+
+  // 知识块悬停弹框（事件委托）
+  var $tooltip = null;
+  var tooltipTimer = null;
+
+  $(document).on('mouseenter', '.source-chunk-num', function(e) {
+    clearTimeout(tooltipTimer);
+    var $num = $(this);
+    var $msg = $num.closest('.message');
+    var chunksData = $msg.attr('data-chunks');
+
+    if (!chunksData) return;
+
+    try {
+      var chunks = JSON.parse(chunksData);
+      var idx = parseInt($num.attr('data-chunk-index'), 10);
+      if (isNaN(idx) || idx < 0 || idx >= chunks.length) return;
+
+      var content = chunks[idx];
+
+      // 创建或复用弹框
+      if (!$tooltip) {
+        $tooltip = $('<div class="chunk-tooltip"></div>');
+        $('body').append($tooltip);
+      }
+
+      $tooltip.html('<div class="chunk-tooltip-header">知识块 ' + (idx + 1) + '</div><div class="chunk-tooltip-content">' + escapeHtml(content) + '</div>');
+
+      // 定位弹框
+      var rect = $num[0].getBoundingClientRect();
+      var tooltipTop = rect.bottom + 6;
+      var tooltipLeft = rect.left;
+
+      // 防止超出右侧
+      $tooltip.css({ display: 'block', visibility: 'hidden' });
+      var tooltipWidth = $tooltip.outerWidth();
+      if (tooltipLeft + tooltipWidth > window.innerWidth - 10) {
+        tooltipLeft = window.innerWidth - tooltipWidth - 10;
+      }
+      // 防止超出底部
+      var tooltipHeight = $tooltip.outerHeight();
+      if (tooltipTop + tooltipHeight > window.innerHeight - 10) {
+        tooltipTop = rect.top - tooltipHeight - 6;
+      }
+
+      $tooltip.css({
+        top: tooltipTop + 'px',
+        left: tooltipLeft + 'px',
+        display: 'block',
+        visibility: 'visible'
+      });
+    } catch(err) {
+      // 解析失败忽略
+    }
+  });
+
+  $(document).on('mouseleave', '.source-chunk-num', function() {
+    tooltipTimer = setTimeout(function() {
+      if ($tooltip) $tooltip.hide();
+    }, 100);
+  });
+
+  // 弹框本身悬停时不消失
+  $(document).on('mouseenter', '.chunk-tooltip', function() {
+    clearTimeout(tooltipTimer);
+  });
+
+  $(document).on('mouseleave', '.chunk-tooltip', function() {
+    tooltipTimer = setTimeout(function() {
+      if ($tooltip) $tooltip.hide();
+    }, 100);
+  });
 }
 
 // ============================================
